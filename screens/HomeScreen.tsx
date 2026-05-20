@@ -1,69 +1,17 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import {
   View,
   Text,
   FlatList,
   StyleSheet,
   TouchableOpacity,
-  SafeAreaView,
+  ActivityIndicator,
+  RefreshControl,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { colors, spacing, radius, fontSize, TAB_BAR_HEIGHT } from '../lib/theme'
 import { FeedItem } from '../types'
-
-const MOCK_FEED: FeedItem[] = [
-  {
-    id: '1',
-    user: { id: 'u1', name: 'James McKenna', avatarUrl: null, handicap: 8 },
-    courseName: 'Pebble Beach Golf Links',
-    courseLocation: 'Pebble Beach, CA',
-    timeAgo: '2h ago',
-    grossScore: 78,
-    vsPar: 6,
-    girCount: 11,
-    likes: 24,
-    comments: 3,
-    likedByMe: false,
-  },
-  {
-    id: '2',
-    user: { id: 'u2', name: 'Sarah Callahan', avatarUrl: null, handicap: 14 },
-    courseName: 'Augusta National Golf Club',
-    courseLocation: 'Augusta, GA',
-    timeAgo: '5h ago',
-    grossScore: 88,
-    vsPar: 16,
-    girCount: 6,
-    likes: 41,
-    comments: 7,
-    likedByMe: true,
-  },
-  {
-    id: '3',
-    user: { id: 'u3', name: 'Ryan Park', avatarUrl: null, handicap: 3 },
-    courseName: 'Bethpage Black',
-    courseLocation: 'Farmingdale, NY',
-    timeAgo: '1d ago',
-    grossScore: 74,
-    vsPar: 2,
-    girCount: 14,
-    likes: 87,
-    comments: 12,
-    likedByMe: false,
-  },
-  {
-    id: '4',
-    user: { id: 'u4', name: 'Lauren Chu', avatarUrl: null, handicap: 18 },
-    courseName: 'Torrey Pines Golf Course',
-    courseLocation: 'La Jolla, CA',
-    timeAgo: '2d ago',
-    grossScore: 92,
-    vsPar: 20,
-    girCount: 4,
-    likes: 15,
-    comments: 2,
-    likedByMe: false,
-  },
-]
+import { supabase } from '../lib/supabase'
 
 function Avatar({ name }: { name: string }) {
   const initials = name
@@ -81,18 +29,11 @@ function Avatar({ name }: { name: string }) {
 
 function ScoreLabel({ vsPar }: { vsPar: number }) {
   const label = vsPar === 0 ? 'E' : vsPar > 0 ? `+${vsPar}` : `${vsPar}`
-  const color =
-    vsPar < 0 ? colors.birdie : vsPar > 5 ? colors.danger : colors.textLight
+  const color = vsPar < 0 ? colors.birdie : vsPar > 5 ? colors.danger : colors.textLight
   return <Text style={[styles.statValue, { color }]}>{label}</Text>
 }
 
-function FeedCard({
-  item,
-  onLike,
-}: {
-  item: FeedItem
-  onLike: (id: string) => void
-}) {
+function FeedCard({ item, onLike }: { item: FeedItem; onLike: (id: string) => void }) {
   return (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
@@ -106,10 +47,6 @@ function FeedCard({
 
       <Text style={styles.courseName}>{item.courseName}</Text>
       <Text style={styles.courseLocation}>{item.courseLocation}</Text>
-
-      <View style={styles.contentPlaceholder}>
-        <Text style={styles.placeholderLabel}>shot map</Text>
-      </View>
 
       <View style={styles.statsRow}>
         <View style={styles.stat}>
@@ -133,29 +70,15 @@ function FeedCard({
           style={styles.actionBtn}
           onPress={() => onLike(item.id)}
           accessibilityRole="button"
-          accessibilityLabel={`Like, ${item.likes} likes`}
         >
-          <Text
-            style={[
-              styles.actionText,
-              item.likedByMe && { color: colors.accent },
-            ]}
-          >
+          <Text style={[styles.actionText, item.likedByMe && { color: colors.accent }]}>
             ♥ {item.likes}
           </Text>
         </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.actionBtn}
-          accessibilityRole="button"
-          accessibilityLabel={`${item.comments} comments`}
-        >
+        <TouchableOpacity style={styles.actionBtn} accessibilityRole="button">
           <Text style={styles.actionText}>◎ {item.comments}</Text>
         </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.actionBtn}
-          accessibilityRole="button"
-          accessibilityLabel="Share"
-        >
+        <TouchableOpacity style={styles.actionBtn} accessibilityRole="button">
           <Text style={styles.actionText}>↗ share</Text>
         </TouchableOpacity>
       </View>
@@ -163,18 +86,98 @@ function FeedCard({
   )
 }
 
+function EmptyFeed() {
+  return (
+    <View style={styles.empty}>
+      <Text style={styles.emptyTitle}>no rounds yet</Text>
+      <Text style={styles.emptyBody}>
+        Follow other golfers to see their rounds here.
+      </Text>
+    </View>
+  )
+}
+
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  if (days < 7) return `${days}d ago`
+  return `${Math.floor(days / 7)}w ago`
+}
+
 export default function HomeScreen() {
-  const [feed, setFeed] = useState(MOCK_FEED)
+  const [feed, setFeed] = useState<FeedItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const loadFeed = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+
+    const { data: followData } = await supabase
+      .from('follows')
+      .select('following_id')
+      .eq('follower_id', user.id)
+
+    const followingIds = [user.id, ...(followData?.map((f: any) => f.following_id) ?? [])]
+
+    const { data: rounds } = await supabase
+      .from('rounds')
+      .select(`
+        id,
+        created_at,
+        gross_score,
+        vs_par,
+        gir_count,
+        likes_count,
+        comments_count,
+        courses (name, location),
+        profiles (id, full_name, avatar_url, handicap)
+      `)
+      .in('user_id', followingIds)
+      .order('created_at', { ascending: false })
+      .limit(30)
+
+    const items: FeedItem[] = (rounds ?? []).map((r: any) => ({
+      id: r.id,
+      user: {
+        id: r.profiles?.id ?? '',
+        name: r.profiles?.full_name ?? 'Unknown',
+        avatarUrl: r.profiles?.avatar_url ?? null,
+        handicap: r.profiles?.handicap ?? 0,
+      },
+      courseName: r.courses?.name ?? 'Unknown course',
+      courseLocation: r.courses?.location ?? '',
+      timeAgo: timeAgo(r.created_at),
+      grossScore: r.gross_score ?? 0,
+      vsPar: r.vs_par ?? 0,
+      girCount: r.gir_count ?? 0,
+      likes: r.likes_count ?? 0,
+      comments: r.comments_count ?? 0,
+      likedByMe: false,
+    }))
+
+    setFeed(items)
+  }, [])
+
+  useEffect(() => {
+    loadFeed().finally(() => setLoading(false))
+  }, [loadFeed])
+
+  async function handleRefresh() {
+    setRefreshing(true)
+    await loadFeed()
+    setRefreshing(false)
+  }
 
   function handleLike(id: string) {
     setFeed(prev =>
       prev.map(item =>
         item.id === id
-          ? {
-              ...item,
-              likedByMe: !item.likedByMe,
-              likes: item.likedByMe ? item.likes - 1 : item.likes + 1,
-            }
+          ? { ...item, likedByMe: !item.likedByMe, likes: item.likedByMe ? item.likes - 1 : item.likes + 1 }
           : item
       )
     )
@@ -185,15 +188,25 @@ export default function HomeScreen() {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>feed</Text>
       </View>
-      <FlatList
-        data={feed}
-        keyExtractor={item => item.id}
-        renderItem={({ item }) => (
-          <FeedCard item={item} onLike={handleLike} />
-        )}
-        contentContainerStyle={styles.list}
-        showsVerticalScrollIndicator={false}
-      />
+      {loading ? (
+        <ActivityIndicator color={colors.accent} style={styles.loader} />
+      ) : (
+        <FlatList
+          data={feed}
+          keyExtractor={item => item.id}
+          renderItem={({ item }) => <FeedCard item={item} onLike={handleLike} />}
+          contentContainerStyle={[styles.list, feed.length === 0 && styles.listEmpty]}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={<EmptyFeed />}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor={colors.accent}
+            />
+          }
+        />
+      )}
     </SafeAreaView>
   )
 }
@@ -215,10 +228,34 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xl,
     fontWeight: '500',
   },
+  loader: {
+    marginTop: spacing.xxl,
+  },
   list: {
     padding: spacing.md,
     gap: spacing.md,
     paddingBottom: TAB_BAR_HEIGHT + spacing.md,
+  },
+  listEmpty: {
+    flex: 1,
+  },
+  empty: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.xl,
+  },
+  emptyTitle: {
+    color: colors.textLight,
+    fontSize: fontSize.lg,
+    fontWeight: '500',
+  },
+  emptyBody: {
+    color: colors.muted,
+    fontSize: fontSize.sm,
+    textAlign: 'center',
+    lineHeight: 20,
   },
   card: {
     backgroundColor: colors.surface,
@@ -278,18 +315,6 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: fontSize.sm,
     marginBottom: spacing.sm,
-  },
-  contentPlaceholder: {
-    height: 160,
-    backgroundColor: colors.border,
-    borderRadius: radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.sm,
-  },
-  placeholderLabel: {
-    color: colors.inactive,
-    fontSize: fontSize.sm,
   },
   statsRow: {
     flexDirection: 'row',

@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import {
   View,
   Text,
@@ -6,118 +6,16 @@ import {
   StyleSheet,
   TouchableOpacity,
   TextInput,
-  SafeAreaView,
+  ActivityIndicator,
+  RefreshControl,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { colors, spacing, radius, fontSize, TAB_BAR_HEIGHT } from '../lib/theme'
-import { Course, ConditionReview, CourseCondition } from '../types'
+import { ConditionReview, CourseCondition } from '../types'
+import { supabase } from '../lib/supabase'
+import { getNearbyGolfCourses, getCurrentLocation, PlacesCourse, DistanceUnit } from '../lib/placesApi'
 
 type ExploreTab = 'courses' | 'reviews' | 'map'
-
-const MOCK_COURSES: Course[] = [
-  {
-    id: 'c1',
-    name: 'Pebble Beach Golf Links',
-    location: 'Pebble Beach, CA',
-    distanceAway: 2.4,
-    holes: 18,
-    type: 'public',
-    starRating: 4.9,
-    condition: 'Excellent',
-    lat: 36.5675,
-    lng: -121.9484,
-  },
-  {
-    id: 'c2',
-    name: 'Spyglass Hill Golf Course',
-    location: 'Pebble Beach, CA',
-    distanceAway: 3.1,
-    holes: 18,
-    type: 'semi-private',
-    starRating: 4.7,
-    condition: 'Good',
-    lat: 36.5787,
-    lng: -121.9612,
-  },
-  {
-    id: 'c3',
-    name: 'Monterey Peninsula Country Club',
-    location: 'Pebble Beach, CA',
-    distanceAway: 4.8,
-    holes: 18,
-    type: 'private',
-    starRating: 4.8,
-    condition: 'Excellent',
-    lat: 36.5534,
-    lng: -121.9421,
-  },
-  {
-    id: 'c4',
-    name: 'Laguna Seca Golf Ranch',
-    location: 'Monterey, CA',
-    distanceAway: 7.2,
-    holes: 18,
-    type: 'public',
-    starRating: 4.1,
-    condition: 'Fair',
-    lat: 36.5792,
-    lng: -121.7535,
-  },
-  {
-    id: 'c5',
-    name: 'Poppy Hills Golf Course',
-    location: 'Pebble Beach, CA',
-    distanceAway: 5.5,
-    holes: 18,
-    type: 'public',
-    starRating: 4.3,
-    condition: 'Good',
-    lat: 36.5883,
-    lng: -121.9498,
-  },
-]
-
-const MOCK_REVIEWS: ConditionReview[] = [
-  {
-    id: 'r1',
-    userId: 'u1',
-    userName: 'James McKenna',
-    courseId: 'c1',
-    courseName: 'Pebble Beach Golf Links',
-    condition: 'Excellent',
-    text: 'Greens were absolutely perfect. Best conditions I have seen all year.',
-    createdAt: '2h ago',
-  },
-  {
-    id: 'r2',
-    userId: 'u3',
-    userName: 'Ryan Park',
-    courseId: 'c4',
-    courseName: 'Laguna Seca Golf Ranch',
-    condition: 'Fair',
-    text: "Fairways a bit patchy after last week's rain. Greens rolling well though.",
-    createdAt: '6h ago',
-  },
-  {
-    id: 'r3',
-    userId: 'u2',
-    userName: 'Sarah Callahan',
-    courseId: 'c2',
-    courseName: 'Spyglass Hill Golf Course',
-    condition: 'Good',
-    text: 'Great shape overall. Back nine greens are quicker than the front.',
-    createdAt: '1d ago',
-  },
-  {
-    id: 'r4',
-    userId: 'u4',
-    userName: 'Lauren Chu',
-    courseId: 'c5',
-    courseName: 'Poppy Hills Golf Course',
-    condition: 'Good',
-    text: 'Recently aerated but recovering nicely. Staff were very helpful.',
-    createdAt: '2d ago',
-  },
-]
 
 const CONDITION_COLOR: Record<CourseCondition, string> = {
   Excellent: colors.accent,
@@ -126,15 +24,7 @@ const CONDITION_COLOR: Record<CourseCondition, string> = {
   Poor: colors.danger,
 }
 
-function TabPill({
-  label,
-  active,
-  onPress,
-}: {
-  label: string
-  active: boolean
-  onPress: () => void
-}) {
+function TabPill({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
   return (
     <TouchableOpacity
       style={[styles.tabPill, active && styles.tabPillActive]}
@@ -142,9 +32,7 @@ function TabPill({
       activeOpacity={0.7}
       accessibilityRole="tab"
     >
-      <Text style={[styles.tabPillText, active && styles.tabPillTextActive]}>
-        {label}
-      </Text>
+      <Text style={[styles.tabPillText, active && styles.tabPillTextActive]}>{label}</Text>
     </TouchableOpacity>
   )
 }
@@ -153,8 +41,7 @@ function StarRating({ rating }: { rating: number }) {
   const full = Math.round(rating)
   return (
     <Text style={styles.stars}>
-      {'★'.repeat(full)}
-      {'☆'.repeat(5 - full)} {rating.toFixed(1)}
+      {'★'.repeat(full)}{'☆'.repeat(5 - full)} {rating.toFixed(1)}
     </Text>
   )
 }
@@ -162,37 +49,45 @@ function StarRating({ rating }: { rating: number }) {
 function ConditionBadge({ condition }: { condition: CourseCondition }) {
   return (
     <View style={styles.conditionRow}>
-      <View
-        style={[
-          styles.conditionDot,
-          { backgroundColor: CONDITION_COLOR[condition] },
-        ]}
-      />
-      <Text style={[styles.conditionText, { color: CONDITION_COLOR[condition] }]}>
-        {condition}
-      </Text>
+      <View style={[styles.conditionDot, { backgroundColor: CONDITION_COLOR[condition] }]} />
+      <Text style={[styles.conditionText, { color: CONDITION_COLOR[condition] }]}>{condition}</Text>
     </View>
   )
 }
 
-function CourseCard({ course }: { course: Course }) {
+function PlacesCourseCard({
+  course,
+  unit,
+  isSaved,
+  onSave,
+}: {
+  course: PlacesCourse
+  unit: DistanceUnit
+  isSaved: boolean
+  onSave: (course: PlacesCourse) => void
+}) {
   return (
-    <TouchableOpacity style={styles.card} activeOpacity={0.75}>
+    <View style={styles.card}>
       <View style={styles.cardTopRow}>
-        <Text style={styles.courseName} numberOfLines={1}>
-          {course.name}
-        </Text>
-        <Text style={styles.distance}>{course.distanceAway} mi</Text>
+        <Text style={styles.courseName} numberOfLines={1}>{course.name}</Text>
+        <Text style={styles.distance}>{course.distance.toFixed(1)} {unit}</Text>
       </View>
-      <Text style={styles.location}>{course.location}</Text>
-      <View style={styles.cardMetaRow}>
-        <Text style={styles.metaText}>
-          {course.holes} holes · {course.type}
-        </Text>
-        <StarRating rating={course.starRating} />
+      <Text style={styles.location}>{course.address}</Text>
+      <View style={styles.cardBottomRow}>
+        {course.rating != null && <StarRating rating={course.rating} />}
+        <TouchableOpacity
+          style={[styles.saveBtn, isSaved && styles.saveBtnSaved]}
+          onPress={() => onSave(course)}
+          disabled={isSaved}
+          accessibilityRole="button"
+          accessibilityLabel={isSaved ? 'Saved' : 'Save course'}
+        >
+          <Text style={[styles.saveBtnText, isSaved && styles.saveBtnTextSaved]}>
+            {isSaved ? 'saved' : 'save'}
+          </Text>
+        </TouchableOpacity>
       </View>
-      <ConditionBadge condition={course.condition} />
-    </TouchableOpacity>
+    </View>
   )
 }
 
@@ -210,25 +105,142 @@ function ReviewCard({ review }: { review: ConditionReview }) {
   )
 }
 
+function EmptyState({ message }: { message: string }) {
+  return (
+    <View style={styles.empty}>
+      <Text style={styles.emptyText}>{message}</Text>
+    </View>
+  )
+}
+
 function MapPlaceholder() {
   return (
     <View style={styles.mapPlaceholder}>
       <Text style={styles.mapPlaceholderText}>map view</Text>
-      <Text style={styles.mapPlaceholderSub}>
-        requires expo-maps or react-native-maps
-      </Text>
+      <Text style={styles.mapPlaceholderSub}>requires expo-maps or react-native-maps</Text>
     </View>
   )
+}
+
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.floor(hrs / 24)}d ago`
 }
 
 export default function ExploreScreen() {
   const [activeTab, setActiveTab] = useState<ExploreTab>('courses')
   const [search, setSearch] = useState('')
 
-  const filteredCourses = MOCK_COURSES.filter(
+  const [nearbyCourses, setNearbyCourses] = useState<PlacesCourse[]>([])
+  const [unit, setUnit] = useState<DistanceUnit>('mi')
+  const [detectedLocation, setDetectedLocation] = useState<string | null>(null)
+  const [savedCourseIds, setSavedCourseIds] = useState<Set<string>>(new Set())
+  const [locationError, setLocationError] = useState<string | null>(null)
+  const [loadingCourses, setLoadingCourses] = useState(true)
+
+  const [reviews, setReviews] = useState<ConditionReview[]>([])
+  const [loadingReviews, setLoadingReviews] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const loadCourses = useCallback(async () => {
+    setLocationError(null)
+    const location = await getCurrentLocation()
+    if (!location) {
+      setLocationError('Location permission denied. Enable it in Settings to see nearby courses.')
+      setLoadingCourses(false)
+      return
+    }
+    setDetectedLocation(`${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`)
+    const [nearbyResult, savedResult] = await Promise.all([
+      getNearbyGolfCourses(location).catch((err: Error) => {
+        setLocationError(`Could not load courses: ${err.message}`)
+        return { courses: [] as PlacesCourse[], unit: 'mi' as DistanceUnit }
+      }),
+      supabase
+        .from('saved_courses')
+        .select('places_id')
+        .then(({ data }) => new Set((data ?? []).map((r: any) => r.places_id as string))),
+    ])
+
+    setNearbyCourses(nearbyResult.courses)
+    setUnit(nearbyResult.unit)
+    setSavedCourseIds(savedResult)
+    setLoadingCourses(false)
+  }, [])
+
+  const loadReviews = useCallback(async () => {
+    const { data } = await supabase
+      .from('condition_reviews')
+      .select(`id, condition, text, created_at, courses (name), profiles (full_name)`)
+      .order('created_at', { ascending: false })
+      .limit(30)
+
+    setReviews(
+      (data ?? []).map((r: any) => ({
+        id: r.id,
+        userId: '',
+        userName: r.profiles?.full_name ?? 'Unknown',
+        courseId: '',
+        courseName: r.courses?.name ?? 'Unknown course',
+        condition: r.condition,
+        text: r.text,
+        createdAt: timeAgo(r.created_at),
+      }))
+    )
+    setLoadingReviews(false)
+  }, [])
+
+  useEffect(() => {
+    loadCourses()
+    loadReviews()
+  }, [loadCourses, loadReviews])
+
+  async function handleRefresh() {
+    setRefreshing(true)
+    setLoadingCourses(true)
+    setLoadingReviews(true)
+    await Promise.all([loadCourses(), loadReviews()])
+    setRefreshing(false)
+  }
+
+  async function handleSaveCourse(course: PlacesCourse) {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+
+    // Upsert the course into the courses table using places_id
+    const { data: courseRow } = await supabase
+      .from('courses')
+      .upsert(
+        { places_id: course.placeId, name: course.name, location: course.address, lat: course.lat, lng: course.lng },
+        { onConflict: 'places_id', ignoreDuplicates: false }
+      )
+      .select('id')
+      .single()
+
+    if (courseRow) {
+      await supabase.from('saved_courses').upsert({
+        user_id: user.id,
+        course_id: courseRow.id,
+        places_id: course.placeId,
+        course_name: course.name,
+        course_location: course.address,
+      })
+      setSavedCourseIds(prev => new Set([...prev, course.placeId]))
+    }
+  }
+
+  const filteredCourses = nearbyCourses.filter(
     c =>
       c.name.toLowerCase().includes(search.toLowerCase()) ||
-      c.location.toLowerCase().includes(search.toLowerCase())
+      c.address.toLowerCase().includes(search.toLowerCase())
+  )
+
+  const refreshControl = (
+    <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.accent} />
   )
 
   return (
@@ -251,41 +263,56 @@ export default function ExploreScreen() {
       </View>
 
       <View style={styles.tabRow}>
-        <TabPill
-          label="courses"
-          active={activeTab === 'courses'}
-          onPress={() => setActiveTab('courses')}
-        />
-        <TabPill
-          label="reviews"
-          active={activeTab === 'reviews'}
-          onPress={() => setActiveTab('reviews')}
-        />
-        <TabPill
-          label="map"
-          active={activeTab === 'map'}
-          onPress={() => setActiveTab('map')}
-        />
+        <TabPill label="courses" active={activeTab === 'courses'} onPress={() => setActiveTab('courses')} />
+        <TabPill label="reviews" active={activeTab === 'reviews'} onPress={() => setActiveTab('reviews')} />
+        <TabPill label="map" active={activeTab === 'map'} onPress={() => setActiveTab('map')} />
       </View>
 
+      {activeTab === 'courses' && detectedLocation && !loadingCourses && (
+        <Text style={styles.debugLocation}>📍 {detectedLocation} · {unit}</Text>
+      )}
+
       {activeTab === 'courses' && (
-        <FlatList
-          data={filteredCourses}
-          keyExtractor={item => item.id}
-          renderItem={({ item }) => <CourseCard course={item} />}
-          contentContainerStyle={styles.list}
-          showsVerticalScrollIndicator={false}
-        />
+        loadingCourses ? (
+          <ActivityIndicator color={colors.accent} style={styles.loader} />
+        ) : locationError ? (
+          <View style={styles.errorState}>
+            <Text style={styles.errorText}>{locationError}</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={filteredCourses}
+            keyExtractor={item => item.placeId}
+            renderItem={({ item }) => (
+              <PlacesCourseCard
+                course={item}
+                unit={unit}
+                isSaved={savedCourseIds.has(item.placeId)}
+                onSave={handleSaveCourse}
+              />
+            )}
+            contentContainerStyle={[styles.list, filteredCourses.length === 0 && styles.listEmpty]}
+            showsVerticalScrollIndicator={false}
+            ListEmptyComponent={<EmptyState message="no courses found nearby" />}
+            refreshControl={refreshControl}
+          />
+        )
       )}
 
       {activeTab === 'reviews' && (
-        <FlatList
-          data={MOCK_REVIEWS}
-          keyExtractor={item => item.id}
-          renderItem={({ item }) => <ReviewCard review={item} />}
-          contentContainerStyle={styles.list}
-          showsVerticalScrollIndicator={false}
-        />
+        loadingReviews ? (
+          <ActivityIndicator color={colors.accent} style={styles.loader} />
+        ) : (
+          <FlatList
+            data={reviews}
+            keyExtractor={item => item.id}
+            renderItem={({ item }) => <ReviewCard review={item} />}
+            contentContainerStyle={[styles.list, reviews.length === 0 && styles.listEmpty]}
+            showsVerticalScrollIndicator={false}
+            ListEmptyComponent={<EmptyState message="no reviews yet" />}
+            refreshControl={refreshControl}
+          />
+        )
       )}
 
       {activeTab === 'map' && <MapPlaceholder />}
@@ -294,10 +321,7 @@ export default function ExploreScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.bg,
-  },
+  container: { flex: 1, backgroundColor: colors.bg },
   header: {
     paddingHorizontal: spacing.md,
     paddingTop: spacing.md,
@@ -305,15 +329,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  headerTitle: {
-    color: colors.textBright,
-    fontSize: fontSize.xl,
-    fontWeight: '500',
-  },
-  searchRow: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
+  headerTitle: { color: colors.textBright, fontSize: fontSize.xl, fontWeight: '500' },
+  searchRow: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   searchInput: {
     backgroundColor: colors.surface,
     borderWidth: 1,
@@ -325,12 +342,7 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     minHeight: 44,
   },
-  tabRow: {
-    flexDirection: 'row',
-    paddingHorizontal: spacing.md,
-    gap: spacing.sm,
-    paddingBottom: spacing.sm,
-  },
+  tabRow: { flexDirection: 'row', paddingHorizontal: spacing.md, gap: spacing.sm, paddingBottom: spacing.sm },
   tabPill: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
@@ -340,24 +352,16 @@ const styles = StyleSheet.create({
     minHeight: 36,
     justifyContent: 'center',
   },
-  tabPillActive: {
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
-  },
-  tabPillText: {
-    color: colors.muted,
-    fontSize: fontSize.sm,
-    fontWeight: '400',
-  },
-  tabPillTextActive: {
-    color: colors.bg,
-    fontWeight: '500',
-  },
-  list: {
-    padding: spacing.md,
-    gap: spacing.sm,
-    paddingBottom: TAB_BAR_HEIGHT + spacing.md,
-  },
+  tabPillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  tabPillText: { color: colors.muted, fontSize: fontSize.sm },
+  tabPillTextActive: { color: colors.bg, fontWeight: '500' },
+  loader: { marginTop: spacing.xxl },
+  list: { padding: spacing.md, gap: spacing.sm, paddingBottom: TAB_BAR_HEIGHT + spacing.md },
+  listEmpty: { flex: 1 },
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  emptyText: { color: colors.muted, fontSize: fontSize.md },
+  errorState: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xl },
+  errorText: { color: colors.muted, fontSize: fontSize.sm, textAlign: 'center', lineHeight: 22 },
   card: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
@@ -365,89 +369,34 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  cardTopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 2,
-  },
-  courseName: {
-    color: colors.textBright,
-    fontSize: fontSize.md,
-    fontWeight: '500',
-    flex: 1,
-    marginRight: spacing.sm,
-  },
-  distance: {
-    color: colors.muted,
-    fontSize: fontSize.sm,
-  },
-  location: {
-    color: colors.muted,
-    fontSize: fontSize.sm,
-    marginBottom: spacing.sm,
-  },
-  cardMetaRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.sm,
-  },
-  metaText: {
-    color: colors.muted,
-    fontSize: fontSize.sm,
-  },
-  stars: {
-    color: colors.gold,
-    fontSize: fontSize.sm,
-  },
-  conditionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  conditionDot: {
-    width: 8,
-    height: 8,
+  cardTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 2 },
+  cardBottomRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing.sm },
+  courseName: { color: colors.textBright, fontSize: fontSize.md, fontWeight: '500', flex: 1, marginRight: spacing.sm },
+  distance: { color: colors.muted, fontSize: fontSize.sm },
+  location: { color: colors.muted, fontSize: fontSize.sm },
+  stars: { color: colors.gold, fontSize: fontSize.sm },
+  saveBtn: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
     borderRadius: radius.full,
-  },
-  conditionText: {
-    fontSize: fontSize.sm,
-    fontWeight: '500',
-  },
-  reviewUser: {
-    color: colors.textBright,
-    fontSize: fontSize.md,
-    fontWeight: '500',
-  },
-  reviewTime: {
-    color: colors.muted,
-    fontSize: fontSize.sm,
-  },
-  reviewCourse: {
-    color: colors.muted,
-    fontSize: fontSize.sm,
-    marginBottom: spacing.sm,
-  },
-  reviewText: {
-    color: colors.textLight,
-    fontSize: fontSize.sm,
-    marginTop: spacing.sm,
-    lineHeight: 20,
-  },
-  mapPlaceholder: {
-    flex: 1,
-    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.accent,
+    minHeight: 30,
     justifyContent: 'center',
-    gap: spacing.sm,
+    alignItems: 'center',
   },
-  mapPlaceholderText: {
-    color: colors.muted,
-    fontSize: fontSize.lg,
-    fontWeight: '500',
-  },
-  mapPlaceholderSub: {
-    color: colors.inactive,
-    fontSize: fontSize.sm,
-  },
+  saveBtnSaved: { borderColor: colors.borderLight, backgroundColor: colors.borderLight },
+  saveBtnText: { color: colors.accent, fontSize: fontSize.sm, fontWeight: '500' },
+  saveBtnTextSaved: { color: colors.muted },
+  conditionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  conditionDot: { width: 8, height: 8, borderRadius: radius.full },
+  conditionText: { fontSize: fontSize.sm, fontWeight: '500' },
+  reviewUser: { color: colors.textBright, fontSize: fontSize.md, fontWeight: '500' },
+  reviewTime: { color: colors.muted, fontSize: fontSize.sm },
+  reviewCourse: { color: colors.muted, fontSize: fontSize.sm, marginBottom: spacing.sm },
+  reviewText: { color: colors.textLight, fontSize: fontSize.sm, marginTop: spacing.sm, lineHeight: 20 },
+  mapPlaceholder: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  mapPlaceholderText: { color: colors.muted, fontSize: fontSize.lg, fontWeight: '500' },
+  mapPlaceholderSub: { color: colors.inactive, fontSize: fontSize.sm },
+  debugLocation: { color: colors.inactive, fontSize: fontSize.xs, paddingHorizontal: spacing.md, paddingBottom: spacing.xs },
 })

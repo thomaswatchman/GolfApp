@@ -3,7 +3,13 @@
     "allow": [
       "Bash(npx create-expo-app@latest . --template blank-typescript)",
       "Read(//private/tmp/**)",
-      "Bash(npx create-expo-app@latest _golfapp_scaffold --template blank-typescript)"
+      "Bash(npx create-expo-app@latest _golfapp_scaffold --template blank-typescript)",
+      "Bash(xcrun simctl *)",
+      "Bash(open -a Simulator --args -CurrentDeviceUDID \"9C3AA9A7-2617-4C84-A387-D7EEEC5FC267\")",
+      "Bash(curl -s https://status.ngrok.com/api/v2/status.json)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(d.get\\('status', {}\\).get\\('description', 'unknown'\\)\\)\")",
+      "Bash(npx expo *)",
+      "Bash(npm install *)"
     ]
   }
 }
