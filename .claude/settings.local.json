@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx create-expo-app@latest . --template blank-typescript)",
+      "Read(//private/tmp/**)",
+      "Bash(npx create-expo-app@latest _golfapp_scaffold --template blank-typescript)"
+    ]
+  }
+}
