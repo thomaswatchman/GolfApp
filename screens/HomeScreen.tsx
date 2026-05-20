@@ -9,9 +9,14 @@ import {
   RefreshControl,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { useNavigation } from '@react-navigation/native'
+import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { colors, spacing, radius, fontSize, TAB_BAR_HEIGHT } from '../lib/theme'
 import { FeedItem } from '../types'
 import { supabase } from '../lib/supabase'
+import { RootStackParamList } from '../navigation/RootStack'
+
+type Nav = NativeStackNavigationProp<RootStackParamList>
 
 function Avatar({ name }: { name: string }) {
   const initials = name
@@ -34,16 +39,24 @@ function ScoreLabel({ vsPar }: { vsPar: number }) {
 }
 
 function FeedCard({ item, onLike }: { item: FeedItem; onLike: (id: string) => void }) {
+  const navigation = useNavigation<Nav>()
+
   return (
     <View style={styles.card}>
-      <View style={styles.cardHeader}>
+      <TouchableOpacity
+        style={styles.cardHeader}
+        onPress={() => navigation.navigate('UserProfile', { userId: item.user.id })}
+        activeOpacity={0.75}
+        accessibilityRole="button"
+        accessibilityLabel={`View ${item.user.name}'s profile`}
+      >
         <Avatar name={item.user.name} />
         <View style={styles.cardHeaderText}>
           <Text style={styles.userName}>{item.user.name}</Text>
           <Text style={styles.timeAgo}>{item.timeAgo}</Text>
         </View>
         <Text style={styles.handicapBadge}>hcp {item.user.handicap}</Text>
-      </View>
+      </TouchableOpacity>
 
       <Text style={styles.courseName}>{item.courseName}</Text>
       <Text style={styles.courseLocation}>{item.courseLocation}</Text>

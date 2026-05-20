@@ -10,8 +10,13 @@ import {
   RefreshControl,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { useNavigation } from '@react-navigation/native'
+import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { colors, spacing, radius, fontSize, TAB_BAR_HEIGHT } from '../lib/theme'
 import { supabase } from '../lib/supabase'
+import { RootStackParamList } from '../navigation/RootStack'
+
+type Nav = NativeStackNavigationProp<RootStackParamList>
 
 type NetworkTab = 'following' | 'suggested'
 
@@ -39,13 +44,15 @@ function PlayerRow({
   player,
   showMutuals,
   onToggleFollow,
+  onPress,
 }: {
   player: NetworkPlayer
   showMutuals: boolean
   onToggleFollow: (id: string) => void
+  onPress: () => void
 }) {
   return (
-    <TouchableOpacity style={styles.playerRow} activeOpacity={0.75}>
+    <TouchableOpacity style={styles.playerRow} activeOpacity={0.75} onPress={onPress}>
       <Avatar name={player.name} />
       <View style={styles.playerInfo}>
         <Text style={styles.playerName}>{player.name}</Text>
@@ -151,6 +158,7 @@ export default function NetworkScreen() {
       .from('profiles')
       .select('id, full_name, avatar_url, handicap, home_course')
       .not('id', 'in', `(${followingIds.join(',')})`)
+      .neq('id', user.id)
       .limit(20)
 
     setSuggested(
@@ -182,23 +190,35 @@ export default function NetworkScreen() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
-    const isCurrentlyFollowing = following.some(p => p.id === playerId)
+    const isCurrentlyFollowing =
+      following.some(p => p.id === playerId) ||
+      suggested.find(p => p.id === playerId)?.isFollowing === true
 
     if (isCurrentlyFollowing) {
-      await supabase
+      const { error } = await supabase
         .from('follows')
         .delete()
         .eq('follower_id', user.id)
         .eq('following_id', playerId)
-      setFollowing(prev => prev.filter(p => p.id !== playerId))
-      setSuggested(prev => prev.map(p => p.id === playerId ? { ...p, isFollowing: false } : p))
+      if (!error) {
+        setFollowing(prev => prev.filter(p => p.id !== playerId))
+        setSuggested(prev => prev.map(p => p.id === playerId ? { ...p, isFollowing: false } : p))
+      }
     } else {
-      await supabase
+      const { error } = await supabase
         .from('follows')
         .insert({ follower_id: user.id, following_id: playerId })
-      setSuggested(prev => prev.map(p => p.id === playerId ? { ...p, isFollowing: true } : p))
+      if (!error) {
+        const newFollow = suggested.find(p => p.id === playerId)
+        if (newFollow) {
+          setFollowing(prev => [...prev, { ...newFollow, isFollowing: true }])
+        }
+        setSuggested(prev => prev.map(p => p.id === playerId ? { ...p, isFollowing: true } : p))
+      }
     }
   }
+
+  const navigation = useNavigation<Nav>()
 
   const data = activeTab === 'following' ? following : suggested
   const loading = activeTab === 'following' ? loadingFollowing : loadingSuggested
@@ -253,6 +273,7 @@ export default function NetworkScreen() {
               player={item}
               showMutuals={activeTab === 'suggested'}
               onToggleFollow={toggleFollow}
+              onPress={() => navigation.navigate('UserProfile', { userId: item.id })}
             />
           )}
           contentContainerStyle={[styles.list, filtered.length === 0 && styles.listEmpty]}

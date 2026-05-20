@@ -45,32 +45,60 @@ async function detectUnit(lat: number, lng: number): Promise<DistanceUnit> {
   }
 }
 
+async function fetchPage(url: string): Promise<any> {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`Places API error: ${res.status}`)
+  const json = await res.json()
+  if (json.status !== 'OK' && json.status !== 'ZERO_RESULTS') {
+    throw new Error(`Places API: ${json.status}`)
+  }
+  return json
+}
+
 export async function getNearbyGolfCourses(userLocation: UserLocation): Promise<NearbyCoursesResult> {
   if (!API_KEY) throw new Error('EXPO_PUBLIC_GOOGLE_PLACES_API_KEY is not set')
 
   const { lat, lng } = userLocation
 
-  const [unit, res] = await Promise.all([
+  const [unit, firstPage] = await Promise.all([
     detectUnit(lat, lng),
-    fetch(
+    fetchPage(
       `https://maps.googleapis.com/maps/api/place/nearbysearch/json` +
-      `?location=${lat},${lng}` +
-      `&radius=50000` +
-      `&keyword=golf+course` +
-      `&key=${API_KEY}`
+      `?location=${lat},${lng}&radius=50000&keyword=golf+course&key=${API_KEY}`
     ),
   ])
 
-  if (!res.ok) throw new Error(`Places API error: ${res.status}`)
+  let results = [...(firstPage.results ?? [])]
 
-  const json = await res.json()
-  if (json.status !== 'OK' && json.status !== 'ZERO_RESULTS') {
-    throw new Error(`Places API: ${json.status}`)
+  // Fetch up to 2 more pages (60 results total)
+  if (firstPage.next_page_token) {
+    await new Promise(r => setTimeout(r, 2000)) // API requires a short delay
+    const page2 = await fetchPage(
+      `https://maps.googleapis.com/maps/api/place/nearbysearch/json` +
+      `?pagetoken=${firstPage.next_page_token}&key=${API_KEY}`
+    ).catch(() => null)
+
+    if (page2?.results) {
+      results = [...results, ...page2.results]
+
+      if (page2.next_page_token) {
+        await new Promise(r => setTimeout(r, 2000))
+        const page3 = await fetchPage(
+          `https://maps.googleapis.com/maps/api/place/nearbysearch/json` +
+          `?pagetoken=${page2.next_page_token}&key=${API_KEY}`
+        ).catch(() => null)
+        if (page3?.results) results = [...results, ...page3.results]
+      }
+    }
   }
 
-  const maxDistance = unit === 'km' ? 50 : 31
-
-  const courses = (json.results ?? [])
+  const seen = new Set<string>()
+  const courses = results
+    .filter((place: any) => {
+      if (seen.has(place.place_id)) return false
+      seen.add(place.place_id)
+      return true
+    })
     .map((place: any): PlacesCourse => ({
       placeId: place.place_id,
       name: place.name,
@@ -80,7 +108,6 @@ export async function getNearbyGolfCourses(userLocation: UserLocation): Promise<
       distance: haversine(lat, lng, place.geometry.location.lat, place.geometry.location.lng, unit),
       rating: place.rating ?? null,
     }))
-    .filter((c: PlacesCourse) => c.distance <= maxDistance)
     .sort((a: PlacesCourse, b: PlacesCourse) => a.distance - b.distance)
 
   return { courses, unit }

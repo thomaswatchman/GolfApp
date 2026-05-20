@@ -7,6 +7,7 @@ import ProfileSettingsScreen from '../screens/profile/ProfileSettingsScreen'
 import StatisticsScreen from '../screens/profile/StatisticsScreen'
 import ToursScreen from '../screens/profile/ToursScreen'
 import PastRoundsScreen from '../screens/profile/PastRoundsScreen'
+import BagScreen from '../screens/profile/BagScreen'
 
 export type ProfileStackParamList = {
   ProfileMain: undefined
@@ -14,6 +15,7 @@ export type ProfileStackParamList = {
   Statistics: undefined
   Tours: undefined
   PastRounds: undefined
+  Bag: undefined
 }
 
 const Stack = createNativeStackNavigator<ProfileStackParamList>()
@@ -32,6 +34,7 @@ export default function ProfileStack() {
       <Stack.Screen name="Statistics" component={StatisticsScreen} />
       <Stack.Screen name="Tours" component={ToursScreen} />
       <Stack.Screen name="PastRounds" component={PastRoundsScreen} />
+      <Stack.Screen name="Bag" component={BagScreen} />
     </Stack.Navigator>
   )
 }

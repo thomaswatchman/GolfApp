@@ -10,6 +10,7 @@ import {
   RefreshControl,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import MapView, { Marker, Callout } from 'react-native-maps'
 import { colors, spacing, radius, fontSize, TAB_BAR_HEIGHT } from '../lib/theme'
 import { ConditionReview, CourseCondition } from '../types'
 import { supabase } from '../lib/supabase'
@@ -113,12 +114,52 @@ function EmptyState({ message }: { message: string }) {
   )
 }
 
-function MapPlaceholder() {
+function CourseMap({
+  courses,
+  userLatLng,
+  savedIds,
+  onToggleSave,
+  unit,
+}: {
+  courses: PlacesCourse[]
+  userLatLng: { lat: number; lng: number } | null
+  savedIds: Set<string>
+  onToggleSave: (c: PlacesCourse) => void
+  unit: DistanceUnit
+}) {
+  const region = userLatLng
+    ? { latitude: userLatLng.lat, longitude: userLatLng.lng, latitudeDelta: 0.35, longitudeDelta: 0.35 }
+    : { latitude: 53.5461, longitude: -113.4938, latitudeDelta: 0.35, longitudeDelta: 0.35 }
+
   return (
-    <View style={styles.mapPlaceholder}>
-      <Text style={styles.mapPlaceholderText}>map view</Text>
-      <Text style={styles.mapPlaceholderSub}>requires expo-maps or react-native-maps</Text>
-    </View>
+    <MapView
+      style={styles.map}
+      initialRegion={region}
+      showsUserLocation
+      showsMyLocationButton
+      userInterfaceStyle="dark"
+    >
+      {courses.map(course => {
+        const isSaved = savedIds.has(course.placeId)
+        return (
+          <Marker
+            key={course.placeId}
+            coordinate={{ latitude: course.lat, longitude: course.lng }}
+            pinColor={isSaved ? colors.accent : colors.muted}
+          >
+            <Callout tooltip onPress={() => onToggleSave(course)}>
+              <View style={styles.callout}>
+                <Text style={styles.calloutName}>{course.name}</Text>
+                <Text style={styles.calloutSub}>{course.distance.toFixed(1)} {unit} away</Text>
+                <Text style={isSaved ? styles.calloutSaved : styles.calloutSave}>
+                  {isSaved ? '✓ saved — tap to unsave' : 'tap to save'}
+                </Text>
+              </View>
+            </Callout>
+          </Marker>
+        )
+      })}
+    </MapView>
   )
 }
 
@@ -138,6 +179,7 @@ export default function ExploreScreen() {
   const [nearbyCourses, setNearbyCourses] = useState<PlacesCourse[]>([])
   const [unit, setUnit] = useState<DistanceUnit>('mi')
   const [detectedLocation, setDetectedLocation] = useState<string | null>(null)
+  const [userLatLng, setUserLatLng] = useState<{ lat: number; lng: number } | null>(null)
   const [savedCourseIds, setSavedCourseIds] = useState<Set<string>>(new Set())
   const [locationError, setLocationError] = useState<string | null>(null)
   const [loadingCourses, setLoadingCourses] = useState(true)
@@ -155,6 +197,7 @@ export default function ExploreScreen() {
       return
     }
     setDetectedLocation(`${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`)
+    setUserLatLng(location)
     const [nearbyResult, savedResult] = await Promise.all([
       getNearbyGolfCourses(location).catch((err: Error) => {
         setLocationError(`Could not load courses: ${err.message}`)
@@ -207,11 +250,24 @@ export default function ExploreScreen() {
     setRefreshing(false)
   }
 
-  async function handleSaveCourse(course: PlacesCourse) {
+  async function handleToggleSave(course: PlacesCourse) {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
-    // Upsert the course into the courses table using places_id
+    if (savedCourseIds.has(course.placeId)) {
+      await supabase
+        .from('saved_courses')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('places_id', course.placeId)
+      setSavedCourseIds(prev => {
+        const next = new Set(prev)
+        next.delete(course.placeId)
+        return next
+      })
+      return
+    }
+
     const { data: courseRow } = await supabase
       .from('courses')
       .upsert(
@@ -288,7 +344,7 @@ export default function ExploreScreen() {
                 course={item}
                 unit={unit}
                 isSaved={savedCourseIds.has(item.placeId)}
-                onSave={handleSaveCourse}
+                onSave={handleToggleSave}
               />
             )}
             contentContainerStyle={[styles.list, filteredCourses.length === 0 && styles.listEmpty]}
@@ -315,7 +371,19 @@ export default function ExploreScreen() {
         )
       )}
 
-      {activeTab === 'map' && <MapPlaceholder />}
+      {activeTab === 'map' && (
+        loadingCourses ? (
+          <ActivityIndicator color={colors.accent} style={styles.loader} />
+        ) : (
+          <CourseMap
+            courses={nearbyCourses}
+            userLatLng={userLatLng}
+            savedIds={savedCourseIds}
+            onToggleSave={handleToggleSave}
+            unit={unit}
+          />
+        )
+      )}
     </SafeAreaView>
   )
 }
@@ -399,4 +467,15 @@ const styles = StyleSheet.create({
   mapPlaceholderText: { color: colors.muted, fontSize: fontSize.lg, fontWeight: '500' },
   mapPlaceholderSub: { color: colors.inactive, fontSize: fontSize.sm },
   debugLocation: { color: colors.inactive, fontSize: fontSize.xs, paddingHorizontal: spacing.md, paddingBottom: spacing.xs },
+  map: { flex: 1 },
+  callout: {
+    width: 200,
+    padding: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+  },
+  calloutName: { color: colors.textBright, fontSize: fontSize.sm, fontWeight: '500', marginBottom: 2 },
+  calloutSub: { color: colors.muted, fontSize: fontSize.xs },
+  calloutSave: { color: colors.accent, fontSize: fontSize.xs, marginTop: spacing.xs, fontWeight: '500' },
+  calloutSaved: { color: colors.muted, fontSize: fontSize.xs, marginTop: spacing.xs },
 })

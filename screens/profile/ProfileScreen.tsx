@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useCallback } from 'react'
+import { useFocusEffect } from '@react-navigation/native'
 import {
   View,
   Text,
@@ -100,18 +101,18 @@ export default function ProfileScreen() {
 
     const { data } = await supabase
       .from('profiles')
-      .select('id, full_name, handicap, avatar_url, rounds_played, best_round, following_count, followers_count, stat_slot_3, stat_slot_4')
+      .select('*')
       .eq('id', user.id)
       .single()
 
     if (data) {
       setProfile({
         id: data.id,
-        fullName: data.full_name ?? 'Golfer',
-        handicap: data.handicap,
-        avatarUrl: data.avatar_url,
+        fullName: data.full_name ?? user.email ?? 'Golfer',
+        handicap: data.handicap ?? null,
+        avatarUrl: data.avatar_url ?? null,
         roundsPlayed: data.rounds_played ?? 0,
-        bestRound: data.best_round,
+        bestRound: data.best_round ?? null,
         followingCount: data.following_count ?? 0,
         followersCount: data.followers_count ?? 0,
         statSlot3: (data.stat_slot_3 as StatOption) ?? 'following',
@@ -120,9 +121,9 @@ export default function ProfileScreen() {
     }
   }, [])
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     loadProfile().finally(() => setLoading(false))
-  }, [loadProfile])
+  }, [loadProfile]))
 
   async function handleRefresh() {
     setRefreshing(true)
@@ -286,7 +287,7 @@ export default function ProfileScreen() {
 
         {/* Navigation sections */}
         <View style={styles.sections}>
-          <SectionRow label="my bag" onPress={() => {}} />
+          <SectionRow label="my bag" onPress={() => navigation.navigate('Bag')} />
           <SectionRow label="statistics" onPress={() => navigation.navigate('Statistics')} />
           <SectionRow label="tours" onPress={() => navigation.navigate('Tours')} />
           <SectionRow label="past rounds" onPress={() => navigation.navigate('PastRounds')} />
