@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useMemo } from 'react'
 import { useFocusEffect } from '@react-navigation/native'
 import {
   View,
@@ -6,6 +6,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  TextInput,
   Image,
   ActivityIndicator,
   RefreshControl,
@@ -15,85 +16,105 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import * as ImagePicker from 'expo-image-picker'
-import { colors, spacing, radius, fontSize, TAB_BAR_HEIGHT } from '../../lib/theme'
+import * as FileSystem from 'expo-file-system/legacy'
+import { spacing, radius, fontSize, TAB_BAR_HEIGHT, ColorScheme } from '../../lib/theme'
 import { supabase } from '../../lib/supabase'
 import { ProfileStackParamList } from '../../navigation/ProfileStack'
+import { useTheme } from '../../lib/ThemeContext'
+import { cacheGet, cacheSet, cacheInvalidate } from '../../lib/dataCache'
+
+const CACHE_KEY = 'profile_self'
 
 type Nav = NativeStackNavigationProp<ProfileStackParamList, 'ProfileMain'>
+
+function decodeBase64(base64: string): Uint8Array {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
+import { StatOption, STAT_LABELS } from './ProfileSettingsScreen'
 
 interface Profile {
   id: string
   fullName: string
+  bio: string | null
   handicap: number | null
   avatarUrl: string | null
   roundsPlayed: number
   bestRound: number | null
   followingCount: number
   followersCount: number
+  statSlot1: StatOption
+  statSlot2: StatOption
   statSlot3: StatOption
   statSlot4: StatOption
 }
 
-export type StatOption = 'following' | 'followers' | 'avg_score' | 'gir_pct' | 'fairways_pct' | 'rounds_year'
-
-export const STAT_LABELS: Record<StatOption, string> = {
-  following: 'following',
-  followers: 'followers',
-  avg_score: 'avg score',
-  gir_pct: 'GIR %',
-  fairways_pct: 'FWY %',
-  rounds_year: 'this year',
-}
-
 function GolferSilhouette() {
+  const { colors: c } = useTheme()
   return (
-    <View style={styles.silhouette}>
-      <Text style={styles.silhouetteEmoji}>🏌️</Text>
+    <View style={{ width: 96, height: 96, borderRadius: 999, backgroundColor: c.surface, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: c.borderLight }}>
+      <Text style={{ fontSize: 48 }}>🏌️</Text>
     </View>
   )
 }
 
-function SectionRow({
-  label,
-  onPress,
-}: {
-  label: string
-  onPress: () => void
-}) {
+function SectionRow({ label, onPress }: { label: string; onPress: () => void }) {
+  const { colors: c } = useTheme()
   return (
-    <TouchableOpacity style={styles.sectionRow} onPress={onPress} activeOpacity={0.75}>
-      <Text style={styles.sectionRowLabel}>{label}</Text>
-      <Text style={styles.sectionRowChevron}>›</Text>
+    <TouchableOpacity
+      style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.md, minHeight: 56, borderBottomWidth: 1, borderBottomColor: c.border }}
+      onPress={onPress}
+      activeOpacity={0.75}
+    >
+      <Text style={{ color: c.textBright, fontSize: fontSize.md, fontWeight: '500' }}>{label}</Text>
+      <Text style={{ color: c.muted, fontSize: 22, fontWeight: '300' }}>›</Text>
     </TouchableOpacity>
   )
 }
 
 function StatBlock({ value, label }: { value: string | number; label: string }) {
+  const { colors: c } = useTheme()
   return (
-    <View style={styles.statBlock}>
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
+    <View style={{ flex: 1, alignItems: 'center' }}>
+      <Text style={{ color: c.textBright, fontSize: fontSize.lg, fontWeight: '500' }}>{value}</Text>
+      <Text style={{ color: c.muted, fontSize: fontSize.xs, marginTop: 2 }}>{label}</Text>
     </View>
   )
 }
 
 function getStatValue(profile: Profile, stat: StatOption): string | number {
   switch (stat) {
+    case 'rounds': return profile.roundsPlayed
+    case 'best_round': return profile.bestRound ?? '—'
     case 'following': return profile.followingCount
     case 'followers': return profile.followersCount
     case 'avg_score': return '—'
     case 'gir_pct': return '—'
     case 'fairways_pct': return '—'
     case 'rounds_year': return '—'
+    case 'avg_driver': return '—'
+    case 'handicap': return profile.handicap != null ? profile.handicap.toFixed(1) : '—'
+    case 'blank': return ''
   }
+}
+
+function StatLabel(stat: StatOption): string {
+  return STAT_LABELS[stat] === '—  blank' ? '' : STAT_LABELS[stat]
 }
 
 export default function ProfileScreen() {
   const navigation = useNavigation<Nav>()
+  const { colors: c } = useTheme()
+  const styles = useMemo(() => makeStyles(c), [c])
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
+  const [editingBio, setEditingBio] = useState(false)
+  const [bioDraft, setBioDraft] = useState('')
 
   const loadProfile = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -106,29 +127,56 @@ export default function ProfileScreen() {
       .single()
 
     if (data) {
-      setProfile({
+      const p: Profile = {
         id: data.id,
         fullName: data.full_name ?? user.email ?? 'Golfer',
+        bio: data.bio ?? null,
         handicap: data.handicap ?? null,
         avatarUrl: data.avatar_url ?? null,
         roundsPlayed: data.rounds_played ?? 0,
         bestRound: data.best_round ?? null,
         followingCount: data.following_count ?? 0,
         followersCount: data.followers_count ?? 0,
-        statSlot3: (data.stat_slot_3 as StatOption) ?? 'following',
-        statSlot4: (data.stat_slot_4 as StatOption) ?? 'followers',
-      })
+        statSlot1: (data.stat_slot_1 as StatOption) || 'rounds',
+        statSlot2: (data.stat_slot_2 as StatOption) || 'best_round',
+        statSlot3: (data.stat_slot_3 as StatOption) || 'following',
+        statSlot4: (data.stat_slot_4 as StatOption) || 'followers',
+      }
+      cacheSet(CACHE_KEY, p)
+      setProfile(p)
     }
   }, [])
 
   useFocusEffect(useCallback(() => {
-    loadProfile().finally(() => setLoading(false))
+    const cached = cacheGet<Profile>(CACHE_KEY)
+    if (cached) {
+      setProfile(cached)
+      setLoading(false)
+      loadProfile() // refresh silently in background
+    } else {
+      loadProfile().finally(() => setLoading(false))
+    }
   }, [loadProfile]))
 
   async function handleRefresh() {
     setRefreshing(true)
     await loadProfile()
     setRefreshing(false)
+  }
+
+  async function handleEditBio() {
+    setBioDraft(profile?.bio ?? '')
+    setEditingBio(true)
+  }
+
+  async function handleSaveBio() {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    const trimmed = bioDraft.trim()
+    await supabase.from('profiles').update({ bio: trimmed || null }).eq('id', user.id)
+    setProfile(prev => prev ? { ...prev, bio: trimmed || null } : prev)
+    cacheInvalidate(CACHE_KEY)
+    setEditingBio(false)
   }
 
   async function handlePickPhoto() {
@@ -157,7 +205,7 @@ export default function ProfileScreen() {
         return
       }
       result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'] as any,
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
@@ -169,7 +217,7 @@ export default function ProfileScreen() {
         return
       }
       result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'] as any,
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
@@ -181,17 +229,23 @@ export default function ProfileScreen() {
     setUploadingPhoto(true)
     try {
       const asset = result.assets[0]
-      const ext = asset.uri.split('.').pop() ?? 'jpg'
-      const path = `avatars/${user.id}.${ext}`
+      // Strip query params before extracting extension
+      const cleanUri = asset.uri.split('?')[0]
+      const ext = cleanUri.split('.').pop()?.toLowerCase() ?? 'jpg'
+      const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg'
+      const path = `${user.id}.${ext}`
 
-      const response = await fetch(asset.uri)
-      const blob = await response.blob()
+      // Read as base64 via expo-file-system — most reliable on React Native
+      const base64 = await FileSystem.readAsStringAsync(asset.uri, {
+        encoding: 'base64' as any,
+      })
+      const bytes = decodeBase64(base64)
 
       const { error: uploadError } = await supabase.storage
         .from('avatars')
-        .upload(path, blob, { upsert: true, contentType: `image/${ext}` })
+        .upload(path, bytes, { upsert: true, contentType: mimeType })
 
-      if (uploadError) throw uploadError
+      if (uploadError) throw new Error(uploadError.message)
 
       const { data: { publicUrl } } = supabase.storage
         .from('avatars')
@@ -203,21 +257,19 @@ export default function ProfileScreen() {
         .eq('id', user.id)
 
       setProfile(prev => prev ? { ...prev, avatarUrl: publicUrl } : prev)
-    } catch (err) {
+      cacheInvalidate(CACHE_KEY)
+    } catch (err: any) {
+      console.error('Upload error:', err?.message ?? err)
       Alert.alert('upload failed', 'could not save your photo')
     } finally {
       setUploadingPhoto(false)
     }
   }
 
-  async function handleSignOut() {
-    await supabase.auth.signOut()
-  }
-
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
-        <ActivityIndicator color={colors.accent} style={{ marginTop: spacing.xxl }} />
+        <ActivityIndicator color={c.accent} style={{ marginTop: spacing.xxl }} />
       </SafeAreaView>
     )
   }
@@ -238,7 +290,7 @@ export default function ProfileScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.accent} />
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={c.accent} />
         }
       >
         {/* Avatar */}
@@ -246,7 +298,7 @@ export default function ProfileScreen() {
           <TouchableOpacity onPress={handlePickPhoto} activeOpacity={0.8} style={styles.avatarWrapper}>
             {uploadingPhoto ? (
               <View style={styles.avatarContainer}>
-                <ActivityIndicator color={colors.accent} />
+                <ActivityIndicator color={c.accent} />
               </View>
             ) : profile?.avatarUrl ? (
               <Image source={{ uri: profile.avatarUrl }} style={styles.avatarImage} />
@@ -260,30 +312,53 @@ export default function ProfileScreen() {
 
           <Text style={styles.name}>{profile?.fullName ?? '—'}</Text>
 
-          {profile?.handicap != null && (
-            <View style={styles.handicapRow}>
-              <Text style={styles.handicapLabel}>handicap index</Text>
-              <Text style={styles.handicapValue}>{profile.handicap.toFixed(1)}</Text>
+          {/* Bio */}
+          {editingBio ? (
+            <View style={styles.bioEditWrapper}>
+              <TextInput
+                style={styles.bioInput}
+                value={bioDraft}
+                onChangeText={setBioDraft}
+                placeholder="write a short bio…"
+                placeholderTextColor={c.inactive}
+                multiline
+                maxLength={160}
+                autoFocus
+              />
+              <View style={styles.bioActions}>
+                <TouchableOpacity onPress={() => setEditingBio(false)} style={styles.bioCancelBtn}>
+                  <Text style={styles.bioCancelText}>cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={handleSaveBio} style={styles.bioSaveBtn}>
+                  <Text style={styles.bioSaveText}>save</Text>
+                </TouchableOpacity>
+              </View>
             </View>
+          ) : (
+            <TouchableOpacity onPress={handleEditBio} activeOpacity={0.75} style={styles.bioRow}>
+              <Text style={profile?.bio ? styles.bioText : styles.bioPlaceholder}>
+                {profile?.bio ?? 'add a bio'}
+              </Text>
+            </TouchableOpacity>
           )}
         </View>
 
-        {/* Stats bar */}
-        <View style={styles.statsBar}>
-          <StatBlock value={profile?.roundsPlayed ?? 0} label="rounds" />
-          <View style={styles.statDivider} />
-          <StatBlock value={profile?.bestRound ?? '—'} label="best" />
-          <View style={styles.statDivider} />
-          <StatBlock
-            value={profile ? getStatValue(profile, profile.statSlot3) : '—'}
-            label={STAT_LABELS[profile?.statSlot3 ?? 'following']}
-          />
-          <View style={styles.statDivider} />
-          <StatBlock
-            value={profile ? getStatValue(profile, profile.statSlot4) : '—'}
-            label={STAT_LABELS[profile?.statSlot4 ?? 'followers']}
-          />
-        </View>
+        {/* Stats bar — filters out blank slots, remaining fill evenly */}
+        {profile && (() => {
+          const slots = [
+            profile.statSlot1, profile.statSlot2, profile.statSlot3, profile.statSlot4,
+          ].filter(s => s !== 'blank')
+          return (
+            <View style={styles.statsBar}>
+              {slots.map((slot, i) => (
+                <React.Fragment key={slot + i}>
+                  {i > 0 && <View style={styles.statDivider} />}
+                  <StatBlock value={getStatValue(profile, slot)} label={StatLabel(slot)} />
+                </React.Fragment>
+              ))}
+            </View>
+          )
+        })()}
 
         {/* Navigation sections */}
         <View style={styles.sections}>
@@ -292,123 +367,75 @@ export default function ProfileScreen() {
           <SectionRow label="tours" onPress={() => navigation.navigate('Tours')} />
           <SectionRow label="past rounds" onPress={() => navigation.navigate('PastRounds')} />
         </View>
-
-        {/* Sign out */}
-        <TouchableOpacity style={styles.signOutBtn} onPress={handleSignOut} activeOpacity={0.75}>
-          <Text style={styles.signOutText}>sign out</Text>
-        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   )
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bg },
-  settingsBtn: {
-    position: 'absolute',
-    top: spacing.lg,
-    right: spacing.md,
-    zIndex: 10,
-    padding: spacing.sm,
-    minHeight: 44,
-    minWidth: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  settingsIcon: { color: colors.muted, fontSize: 22 },
-  scrollContent: { paddingBottom: TAB_BAR_HEIGHT + spacing.md },
-  avatarSection: {
-    alignItems: 'center',
-    paddingTop: spacing.xl,
-    paddingBottom: spacing.lg,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  avatarWrapper: { marginBottom: spacing.md, position: 'relative' },
-  avatarContainer: {
-    width: 96,
-    height: 96,
-    borderRadius: radius.full,
-    backgroundColor: colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: colors.borderLight,
-  },
-  avatarImage: {
-    width: 96,
-    height: 96,
-    borderRadius: radius.full,
-    borderWidth: 2,
-    borderColor: colors.borderLight,
-  },
-  silhouette: {
-    width: 96,
-    height: 96,
-    borderRadius: radius.full,
-    backgroundColor: colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: colors.borderLight,
-  },
-  silhouetteEmoji: { fontSize: 48 },
-  editBadge: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    backgroundColor: colors.accent,
-    borderRadius: radius.full,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    borderWidth: 2,
-    borderColor: colors.bg,
-  },
-  editBadgeText: { color: colors.bg, fontSize: fontSize.xs, fontWeight: '500' },
-  name: {
-    color: colors.textBright,
-    fontSize: fontSize.xl,
-    fontWeight: '500',
-    marginBottom: spacing.xs,
-  },
-  handicapRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  handicapLabel: { color: colors.muted, fontSize: fontSize.sm },
-  handicapValue: { color: colors.accent, fontSize: fontSize.lg, fontWeight: '500' },
-  statsBar: {
-    flexDirection: 'row',
-    paddingVertical: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  statBlock: { flex: 1, alignItems: 'center' },
-  statValue: { color: colors.textBright, fontSize: fontSize.lg, fontWeight: '500' },
-  statLabel: { color: colors.muted, fontSize: fontSize.xs, marginTop: 2 },
-  statDivider: { width: 1, backgroundColor: colors.border, marginVertical: spacing.xs },
-  sections: {
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  sectionRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    minHeight: 56,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  sectionRowLabel: { color: colors.textBright, fontSize: fontSize.md, fontWeight: '500' },
-  sectionRowChevron: { color: colors.muted, fontSize: 22, fontWeight: '300' },
-  signOutBtn: {
-    margin: spacing.lg,
-    paddingVertical: spacing.md,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    minHeight: 52,
-    justifyContent: 'center',
-  },
-  signOutText: { color: colors.muted, fontSize: fontSize.md },
-})
+function makeStyles(c: ColorScheme) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.bg },
+    settingsBtn: {
+      position: 'absolute', top: 52, right: spacing.md, zIndex: 10,
+      padding: spacing.sm, minHeight: 44, minWidth: 44,
+      alignItems: 'center', justifyContent: 'center',
+    },
+    settingsIcon: { color: c.muted, fontSize: 22 },
+    scrollContent: { paddingBottom: TAB_BAR_HEIGHT + spacing.md },
+    avatarSection: {
+      alignItems: 'center', paddingTop: spacing.xl, paddingBottom: spacing.lg,
+      borderBottomWidth: 1, borderBottomColor: c.border,
+    },
+    avatarWrapper: { marginBottom: spacing.md, position: 'relative' },
+    avatarContainer: {
+      width: 96, height: 96, borderRadius: radius.full,
+      backgroundColor: c.surface, alignItems: 'center', justifyContent: 'center',
+      borderWidth: 2, borderColor: c.borderLight,
+    },
+    avatarImage: { width: 96, height: 96, borderRadius: radius.full, borderWidth: 2, borderColor: c.borderLight },
+    silhouette: {
+      width: 96, height: 96, borderRadius: radius.full,
+      backgroundColor: c.surface, alignItems: 'center', justifyContent: 'center',
+      borderWidth: 2, borderColor: c.borderLight,
+    },
+    silhouetteEmoji: { fontSize: 48 },
+    editBadge: {
+      position: 'absolute', bottom: 0, right: 0,
+      backgroundColor: c.accent, borderRadius: radius.full,
+      paddingHorizontal: spacing.sm, paddingVertical: 2,
+      borderWidth: 2, borderColor: c.bg,
+    },
+    editBadgeText: { color: c.bg, fontSize: fontSize.xs, fontWeight: '500' },
+    name: { color: c.textBright, fontSize: fontSize.xl, fontWeight: '500', marginBottom: spacing.xs },
+    bioRow: { paddingHorizontal: spacing.xl, marginTop: spacing.xs },
+    bioText: { color: c.muted, fontSize: fontSize.sm, textAlign: 'center', lineHeight: 20 },
+    bioPlaceholder: { color: c.inactive, fontSize: fontSize.sm, textAlign: 'center' },
+    bioEditWrapper: { width: '100%', paddingHorizontal: spacing.lg, marginTop: spacing.sm, gap: spacing.sm },
+    bioInput: {
+      backgroundColor: c.surface, borderWidth: 1, borderColor: c.border,
+      borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+      color: c.textBright, fontSize: fontSize.sm, minHeight: 72, textAlignVertical: 'top',
+    },
+    bioActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm },
+    bioCancelBtn: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, minHeight: 36, justifyContent: 'center' },
+    bioCancelText: { color: c.muted, fontSize: fontSize.sm },
+    bioSaveBtn: {
+      paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+      backgroundColor: c.accent, borderRadius: radius.full, minHeight: 36, justifyContent: 'center',
+    },
+    bioSaveText: { color: c.bg, fontSize: fontSize.sm, fontWeight: '500' },
+    statsBar: { flexDirection: 'row', paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: c.border },
+    statBlock: { flex: 1, alignItems: 'center' },
+    statValue: { color: c.textBright, fontSize: fontSize.lg, fontWeight: '500' },
+    statLabel: { color: c.muted, fontSize: fontSize.xs, marginTop: 2 },
+    statDivider: { width: 1, backgroundColor: c.border, marginVertical: spacing.xs },
+    sections: { borderBottomWidth: 1, borderBottomColor: c.border },
+    sectionRow: {
+      flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+      paddingHorizontal: spacing.md, paddingVertical: spacing.md,
+      minHeight: 56, borderBottomWidth: 1, borderBottomColor: c.border,
+    },
+    sectionRowLabel: { color: c.textBright, fontSize: fontSize.md, fontWeight: '500' },
+    sectionRowChevron: { color: c.muted, fontSize: 22, fontWeight: '300' },
+  })
+}

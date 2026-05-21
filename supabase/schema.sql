@@ -151,12 +151,20 @@ CREATE POLICY "tour_members_select" ON tour_members FOR SELECT USING (true);
 CREATE POLICY "tour_members_insert" ON tour_members FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "tour_members_delete" ON tour_members FOR DELETE USING (auth.uid() = user_id);
 
--- Additional profile columns for settings
+-- Additional profile columns
 ALTER TABLE profiles
-  ADD COLUMN IF NOT EXISTS show_name      BOOLEAN NOT NULL DEFAULT true,
-  ADD COLUMN IF NOT EXISTS show_handicap  BOOLEAN NOT NULL DEFAULT true,
-  ADD COLUMN IF NOT EXISTS stat_slot_3    TEXT DEFAULT 'following',
-  ADD COLUMN IF NOT EXISTS stat_slot_4    TEXT DEFAULT 'followers';
+  ADD COLUMN IF NOT EXISTS bio                 TEXT,
+  ADD COLUMN IF NOT EXISTS is_private          BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS stat_slot_1         TEXT DEFAULT 'rounds',
+  ADD COLUMN IF NOT EXISTS stat_slot_2         TEXT DEFAULT 'best_round',
+  ADD COLUMN IF NOT EXISTS stat_slot_3         TEXT DEFAULT 'following',
+  ADD COLUMN IF NOT EXISTS stat_slot_4         TEXT DEFAULT 'followers',
+  ADD COLUMN IF NOT EXISTS theme               TEXT DEFAULT 'dark',
+  ADD COLUMN IF NOT EXISTS push_notifications  BOOLEAN NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS notify_followers    BOOLEAN NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS notify_comments     BOOLEAN NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS email_notifications BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS distance_unit       TEXT DEFAULT 'auto';
 
 
 -- ============================================================

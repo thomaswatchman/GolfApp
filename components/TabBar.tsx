@@ -70,13 +70,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderTopWidth: 1,
     borderTopColor: colors.border,
-    paddingBottom: Platform.OS === 'ios' ? spacing.md : spacing.sm,
-    alignItems: 'flex-end',
+    paddingBottom: Platform.OS === 'ios' ? spacing.lg : spacing.sm,
+    paddingTop: spacing.sm,
+    alignItems: 'center',
   },
   tab: {
     flex: 1,
     alignItems: 'center',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
     paddingBottom: spacing.xs,
     minHeight: 44,
   },
@@ -100,7 +101,7 @@ const styles = StyleSheet.create({
   playWrapper: {
     flex: 1,
     alignItems: 'center',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
     paddingBottom: spacing.xs,
   },
   playButton: {

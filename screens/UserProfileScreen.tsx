@@ -22,6 +22,7 @@ type RouteProps = RouteProp<RootStackParamList, 'UserProfile'>
 interface UserProfile {
   id: string
   fullName: string
+  bio: string | null
   handicap: number | null
   avatarUrl: string | null
   roundsPlayed: number
@@ -65,7 +66,7 @@ export default function UserProfileScreen() {
     const [profileRes, roundsRes, followRes] = await Promise.all([
       supabase
         .from('profiles')
-        .select('id, full_name, handicap, avatar_url, rounds_played, best_round, following_count, followers_count')
+        .select('id, full_name, bio, handicap, avatar_url, rounds_played, best_round, following_count, followers_count')
         .eq('id', userId)
         .single(),
       supabase
@@ -87,6 +88,7 @@ export default function UserProfileScreen() {
       setProfile({
         id: p.id,
         fullName: p.full_name ?? 'Golfer',
+        bio: p.bio ?? null,
         handicap: p.handicap,
         avatarUrl: p.avatar_url,
         roundsPlayed: p.rounds_played ?? 0,
@@ -161,6 +163,10 @@ export default function UserProfileScreen() {
             )}
 
             <Text style={styles.name}>{profile?.fullName ?? '—'}</Text>
+
+            {profile?.bio && (
+              <Text style={styles.bio}>{profile.bio}</Text>
+            )}
 
             {profile?.handicap != null && (
               <View style={styles.handicapRow}>
@@ -247,6 +253,7 @@ const styles = StyleSheet.create({
   },
   avatarInitials: { color: colors.textLight, fontSize: fontSize.xl, fontWeight: '500' },
   name: { color: colors.textBright, fontSize: fontSize.xl, fontWeight: '500' },
+  bio: { color: colors.muted, fontSize: fontSize.sm, textAlign: 'center', lineHeight: 20, paddingHorizontal: spacing.xl, marginTop: spacing.xs },
   handicapRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   handicapLabel: { color: colors.muted, fontSize: fontSize.sm },
   handicapValue: { color: colors.accent, fontSize: fontSize.lg, fontWeight: '500' },

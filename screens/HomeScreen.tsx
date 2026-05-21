@@ -1,30 +1,64 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   View,
   Text,
   FlatList,
   StyleSheet,
   TouchableOpacity,
-  ActivityIndicator,
   RefreshControl,
 } from 'react-native'
+import { SkeletonCard } from '../components/Skeleton'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
-import { colors, spacing, radius, fontSize, TAB_BAR_HEIGHT } from '../lib/theme'
+import { spacing, radius, fontSize, TAB_BAR_HEIGHT, ColorScheme } from '../lib/theme'
+import { useTheme } from '../lib/ThemeContext'
 import { FeedItem } from '../types'
 import { supabase } from '../lib/supabase'
 import { RootStackParamList } from '../navigation/RootStack'
+import { cacheGet, cacheSet } from '../lib/dataCache'
 
+const CACHE_KEY = 'home_feed'
 type Nav = NativeStackNavigationProp<RootStackParamList>
 
-function Avatar({ name }: { name: string }) {
-  const initials = name
-    .split(' ')
-    .map(p => p[0])
-    .join('')
-    .toUpperCase()
-    .slice(0, 2)
+function makeStyles(c: ColorScheme) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.bg },
+    header: { paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: spacing.sm, borderBottomWidth: 1, borderBottomColor: c.border },
+    headerTitle: { color: c.textBright, fontSize: fontSize.xl, fontWeight: '500' },
+    list: { padding: spacing.md, gap: spacing.md, paddingBottom: TAB_BAR_HEIGHT + spacing.md },
+    listEmpty: { flex: 1 },
+    empty: { flex: 1, alignItems: 'center' as const, justifyContent: 'center' as const, gap: spacing.sm, paddingHorizontal: spacing.xl },
+    emptyTitle: { color: c.textLight, fontSize: fontSize.lg, fontWeight: '500' },
+    emptyBody: { color: c.muted, fontSize: fontSize.sm, textAlign: 'center' as const, lineHeight: 20 },
+    card: { backgroundColor: c.surface, borderRadius: radius.lg, padding: spacing.md, borderWidth: 1, borderColor: c.border },
+    cardHeader: { flexDirection: 'row' as const, alignItems: 'center' as const, marginBottom: spacing.sm },
+    avatar: { width: 42, height: 42, borderRadius: radius.full, backgroundColor: c.borderLight, alignItems: 'center' as const, justifyContent: 'center' as const },
+    avatarText: { color: c.textLight, fontSize: fontSize.sm, fontWeight: '500' },
+    cardHeaderText: { flex: 1, marginLeft: spacing.sm },
+    userName: { color: c.textBright, fontSize: fontSize.md, fontWeight: '500' },
+    timeAgo: { color: c.muted, fontSize: fontSize.sm, marginTop: 2 },
+    handicapBadge: { color: c.muted, fontSize: fontSize.xs, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderWidth: 1, borderColor: c.borderLight, borderRadius: radius.sm },
+    courseName: { color: c.textLight, fontSize: fontSize.md, fontWeight: '500', marginBottom: 2 },
+    courseLocation: { color: c.muted, fontSize: fontSize.sm, marginBottom: spacing.sm },
+    statsRow: { flexDirection: 'row' as const, justifyContent: 'space-around' as const, paddingVertical: spacing.sm, borderTopWidth: 1, borderBottomWidth: 1, borderColor: c.border, marginBottom: spacing.sm },
+    stat: { flex: 1, alignItems: 'center' as const },
+    statValue: { color: c.textBright, fontSize: 18, fontWeight: '500' },
+    statLabel: { color: c.muted, fontSize: fontSize.xs, marginTop: 2 },
+    statDivider: { width: 1, backgroundColor: c.border, marginVertical: spacing.xs },
+    actions: { flexDirection: 'row' as const, gap: spacing.xs },
+    actionBtn: { flex: 1, paddingVertical: spacing.sm, alignItems: 'center' as const, justifyContent: 'center' as const, minHeight: 44 },
+    actionText: { color: c.muted, fontSize: fontSize.sm },
+    likedText: { color: c.accent, fontSize: fontSize.sm },
+    scoreGood: { color: c.birdie, fontSize: 18, fontWeight: '500' },
+    scoreBad: { color: c.danger, fontSize: 18, fontWeight: '500' },
+  })
+}
+
+type Styles = ReturnType<typeof makeStyles>
+
+function Avatar({ name, styles }: { name: string; styles: Styles }) {
+  const initials = name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)
   return (
     <View style={styles.avatar}>
       <Text style={styles.avatarText}>{initials}</Text>
@@ -32,25 +66,18 @@ function Avatar({ name }: { name: string }) {
   )
 }
 
-function ScoreLabel({ vsPar }: { vsPar: number }) {
+function ScoreLabel({ vsPar, styles }: { vsPar: number; styles: Styles }) {
   const label = vsPar === 0 ? 'E' : vsPar > 0 ? `+${vsPar}` : `${vsPar}`
-  const color = vsPar < 0 ? colors.birdie : vsPar > 5 ? colors.danger : colors.textLight
-  return <Text style={[styles.statValue, { color }]}>{label}</Text>
+  const style = vsPar < 0 ? styles.scoreGood : vsPar > 5 ? styles.scoreBad : styles.statValue
+  return <Text style={style}>{label}</Text>
 }
 
-function FeedCard({ item, onLike }: { item: FeedItem; onLike: (id: string) => void }) {
+function FeedCard({ item, onLike, styles }: { item: FeedItem; onLike: (id: string) => void; styles: Styles }) {
   const navigation = useNavigation<Nav>()
-
   return (
     <View style={styles.card}>
-      <TouchableOpacity
-        style={styles.cardHeader}
-        onPress={() => navigation.navigate('UserProfile', { userId: item.user.id })}
-        activeOpacity={0.75}
-        accessibilityRole="button"
-        accessibilityLabel={`View ${item.user.name}'s profile`}
-      >
-        <Avatar name={item.user.name} />
+      <TouchableOpacity style={styles.cardHeader} onPress={() => navigation.navigate('UserProfile', { userId: item.user.id })} activeOpacity={0.75}>
+        <Avatar name={item.user.name} styles={styles} />
         <View style={styles.cardHeaderText}>
           <Text style={styles.userName}>{item.user.name}</Text>
           <Text style={styles.timeAgo}>{item.timeAgo}</Text>
@@ -63,7 +90,7 @@ function FeedCard({ item, onLike }: { item: FeedItem; onLike: (id: string) => vo
 
       <View style={styles.statsRow}>
         <View style={styles.stat}>
-          <ScoreLabel vsPar={item.vsPar} />
+          <ScoreLabel vsPar={item.vsPar} styles={styles} />
           <Text style={styles.statLabel}>vs par</Text>
         </View>
         <View style={styles.statDivider} />
@@ -79,14 +106,8 @@ function FeedCard({ item, onLike }: { item: FeedItem; onLike: (id: string) => vo
       </View>
 
       <View style={styles.actions}>
-        <TouchableOpacity
-          style={styles.actionBtn}
-          onPress={() => onLike(item.id)}
-          accessibilityRole="button"
-        >
-          <Text style={[styles.actionText, item.likedByMe && { color: colors.accent }]}>
-            ♥ {item.likes}
-          </Text>
+        <TouchableOpacity style={styles.actionBtn} onPress={() => onLike(item.id)} accessibilityRole="button">
+          <Text style={item.likedByMe ? styles.likedText : styles.actionText}>♥ {item.likes}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.actionBtn} accessibilityRole="button">
           <Text style={styles.actionText}>◎ {item.comments}</Text>
@@ -99,13 +120,11 @@ function FeedCard({ item, onLike }: { item: FeedItem; onLike: (id: string) => vo
   )
 }
 
-function EmptyFeed() {
+function EmptyFeed({ styles }: { styles: Styles }) {
   return (
     <View style={styles.empty}>
       <Text style={styles.emptyTitle}>no rounds yet</Text>
-      <Text style={styles.emptyBody}>
-        Follow other golfers to see their rounds here.
-      </Text>
+      <Text style={styles.emptyBody}>Follow other golfers to see their rounds here.</Text>
     </View>
   )
 }
@@ -122,6 +141,8 @@ function timeAgo(dateStr: string): string {
 }
 
 export default function HomeScreen() {
+  const { colors: c } = useTheme()
+  const styles = useMemo(() => makeStyles(c), [c])
   const [feed, setFeed] = useState<FeedItem[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -129,39 +150,17 @@ export default function HomeScreen() {
   const loadFeed = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
-
-    const { data: followData } = await supabase
-      .from('follows')
-      .select('following_id')
-      .eq('follower_id', user.id)
-
+    const { data: followData } = await supabase.from('follows').select('following_id').eq('follower_id', user.id)
     const followingIds = [user.id, ...(followData?.map((f: any) => f.following_id) ?? [])]
-
     const { data: rounds } = await supabase
       .from('rounds')
-      .select(`
-        id,
-        created_at,
-        gross_score,
-        vs_par,
-        gir_count,
-        likes_count,
-        comments_count,
-        courses (name, location),
-        profiles (id, full_name, avatar_url, handicap)
-      `)
+      .select('id, created_at, gross_score, vs_par, gir_count, likes_count, comments_count, courses (name, location), profiles (id, full_name, avatar_url, handicap)')
       .in('user_id', followingIds)
       .order('created_at', { ascending: false })
       .limit(30)
-
     const items: FeedItem[] = (rounds ?? []).map((r: any) => ({
       id: r.id,
-      user: {
-        id: r.profiles?.id ?? '',
-        name: r.profiles?.full_name ?? 'Unknown',
-        avatarUrl: r.profiles?.avatar_url ?? null,
-        handicap: r.profiles?.handicap ?? 0,
-      },
+      user: { id: r.profiles?.id ?? '', name: r.profiles?.full_name ?? 'Unknown', avatarUrl: r.profiles?.avatar_url ?? null, handicap: r.profiles?.handicap ?? 0 },
       courseName: r.courses?.name ?? 'Unknown course',
       courseLocation: r.courses?.location ?? '',
       timeAgo: timeAgo(r.created_at),
@@ -172,28 +171,20 @@ export default function HomeScreen() {
       comments: r.comments_count ?? 0,
       likedByMe: false,
     }))
-
+    cacheSet(CACHE_KEY, items)
     setFeed(items)
   }, [])
 
   useEffect(() => {
-    loadFeed().finally(() => setLoading(false))
+    const cached = cacheGet<FeedItem[]>(CACHE_KEY)
+    if (cached) { setFeed(cached); setLoading(false); loadFeed() }
+    else { loadFeed().finally(() => setLoading(false)) }
   }, [loadFeed])
 
-  async function handleRefresh() {
-    setRefreshing(true)
-    await loadFeed()
-    setRefreshing(false)
-  }
-
   function handleLike(id: string) {
-    setFeed(prev =>
-      prev.map(item =>
-        item.id === id
-          ? { ...item, likedByMe: !item.likedByMe, likes: item.likedByMe ? item.likes - 1 : item.likes + 1 }
-          : item
-      )
-    )
+    setFeed(prev => prev.map(item =>
+      item.id === id ? { ...item, likedByMe: !item.likedByMe, likes: item.likedByMe ? item.likes - 1 : item.likes + 1 } : item
+    ))
   }
 
   return (
@@ -202,174 +193,22 @@ export default function HomeScreen() {
         <Text style={styles.headerTitle}>feed</Text>
       </View>
       {loading ? (
-        <ActivityIndicator color={colors.accent} style={styles.loader} />
+        <View style={styles.list}>
+          <SkeletonCard lines={3} />
+          <SkeletonCard lines={2} />
+          <SkeletonCard lines={3} />
+        </View>
       ) : (
         <FlatList
           data={feed}
           keyExtractor={item => item.id}
-          renderItem={({ item }) => <FeedCard item={item} onLike={handleLike} />}
+          renderItem={({ item }) => <FeedCard item={item} onLike={handleLike} styles={styles} />}
           contentContainerStyle={[styles.list, feed.length === 0 && styles.listEmpty]}
           showsVerticalScrollIndicator={false}
-          ListEmptyComponent={<EmptyFeed />}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={handleRefresh}
-              tintColor={colors.accent}
-            />
-          }
+          ListEmptyComponent={<EmptyFeed styles={styles} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await loadFeed(); setRefreshing(false) }} tintColor={c.accent} />}
         />
       )}
     </SafeAreaView>
   )
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.bg,
-  },
-  header: {
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  headerTitle: {
-    color: colors.textBright,
-    fontSize: fontSize.xl,
-    fontWeight: '500',
-  },
-  loader: {
-    marginTop: spacing.xxl,
-  },
-  list: {
-    padding: spacing.md,
-    gap: spacing.md,
-    paddingBottom: TAB_BAR_HEIGHT + spacing.md,
-  },
-  listEmpty: {
-    flex: 1,
-  },
-  empty: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.xl,
-  },
-  emptyTitle: {
-    color: colors.textLight,
-    fontSize: fontSize.lg,
-    fontWeight: '500',
-  },
-  emptyBody: {
-    color: colors.muted,
-    fontSize: fontSize.sm,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: spacing.sm,
-  },
-  avatar: {
-    width: 42,
-    height: 42,
-    borderRadius: radius.full,
-    backgroundColor: colors.borderLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: {
-    color: colors.textLight,
-    fontSize: fontSize.sm,
-    fontWeight: '500',
-  },
-  cardHeaderText: {
-    flex: 1,
-    marginLeft: spacing.sm,
-  },
-  userName: {
-    color: colors.textBright,
-    fontSize: fontSize.md,
-    fontWeight: '500',
-  },
-  timeAgo: {
-    color: colors.muted,
-    fontSize: fontSize.sm,
-    marginTop: 2,
-  },
-  handicapBadge: {
-    color: colors.muted,
-    fontSize: fontSize.xs,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    borderRadius: radius.sm,
-  },
-  courseName: {
-    color: colors.textLight,
-    fontSize: fontSize.md,
-    fontWeight: '500',
-    marginBottom: 2,
-  },
-  courseLocation: {
-    color: colors.muted,
-    fontSize: fontSize.sm,
-    marginBottom: spacing.sm,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingVertical: spacing.sm,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: colors.border,
-    marginBottom: spacing.sm,
-  },
-  stat: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  statValue: {
-    color: colors.textBright,
-    fontSize: 18,
-    fontWeight: '500',
-  },
-  statLabel: {
-    color: colors.muted,
-    fontSize: fontSize.xs,
-    marginTop: 2,
-  },
-  statDivider: {
-    width: 1,
-    backgroundColor: colors.border,
-    marginVertical: spacing.xs,
-  },
-  actions: {
-    flexDirection: 'row',
-    gap: spacing.xs,
-  },
-  actionBtn: {
-    flex: 1,
-    paddingVertical: spacing.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 44,
-  },
-  actionText: {
-    color: colors.muted,
-    fontSize: fontSize.sm,
-  },
-})
